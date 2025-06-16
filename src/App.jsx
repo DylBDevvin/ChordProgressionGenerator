@@ -7,6 +7,7 @@ import { chordToNotes } from './lib/chordUtils.js';
 import { getRandomProgression } from './lib/progressions.js';
 import { allChords } from './lib/allChords.js';
 
+
 // ─── Instrument constructors (Synth & Piano samples) ───
 const instrumentConstructors = {
   piano: () =>
@@ -21,9 +22,8 @@ const instrumentConstructors = {
         C7:    'C7v7.wav',   'D#7': 'Ds7v7.wav', 'F#7': 'Fs7v7.wav',  A7:    'A7v7.wav',
         C8:    'C8v7.wav',
       },
-      baseUrl: '/samples/piano/',
+      baseUrl: import.meta.env.BASE_URL + 'samples/piano/',
       release: 1,
-      onload: () => console.log('🎹 Piano samples loaded'),
     }).toDestination(),
 
   synth: () =>
@@ -73,6 +73,7 @@ export default function App() {
   const [openDropdownIndex, setOpenDropdownIndex] = useState(-1);
   const [octaveShifts, setOctaveShifts] = useState([0, 0, 0, 0]);
   const [arpeggiateFlags, setArpeggiateFlags] = useState([false, false, false, false]);
+  const timeoutsRef = useRef([]);
 
   // Instrument selection
   const [instrument, setInstrument] = useState('piano');
@@ -120,40 +121,73 @@ export default function App() {
 
   const playChord = async (chord, i) => {
     if (!chord || !synthRef.current) return;
+    // 1) clear any pending note timeouts
+    timeoutsRef.current.forEach(clearTimeout);
+    timeoutsRef.current = [];
+
     await Tone.start();
     synthRef.current.releaseAll();
+
     const notes = shiftOctave(chordToNotes(chord), octaveShifts[i]);
     const duration = 60 / bpm;
+
     if (arpeggiateFlags[i]) {
-      const offset = duration * 0.1;
-      const now = Tone.now();
-      notes.forEach((n, idx) =>
-        synthRef.current.triggerAttackRelease(n, duration - idx * offset, now + idx * offset)
-      );
+      const offsetMs = (duration * 0.1) * 1000;
+      notes.forEach((n, idx) => {
+        const t = setTimeout(() => {
+          synthRef.current.triggerAttackRelease(
+            n,
+            duration - idx * (duration * 0.1)
+          );
+        }, idx * offsetMs);
+        timeoutsRef.current.push(t);
+      });
     } else {
       synthRef.current.triggerAttackRelease(notes, duration);
     }
   };
 
-  const playAllChords = async () => {
+   const playAllChords = async () => {
     if (!synthRef.current) return;
+    // 1) clear any pending note timeouts
+    timeoutsRef.current.forEach(clearTimeout);
+    timeoutsRef.current = [];
+
     await Tone.start();
     synthRef.current.releaseAll();
+
     const interval = 60 / bpm;
-    const now = Tone.now();
+
     chords.forEach((chord, idx) => {
       if (!chord) return;
       const notes = shiftOctave(chordToNotes(chord), octaveShifts[idx]);
-      const time = now + idx * interval;
+
       if (arpeggiateFlags[idx]) {
-        const offset = interval * 0.1;
-        notes.forEach((n, j) =>
-          synthRef.current.triggerAttackRelease(n, interval - j * offset, time + j * offset)
-        );
+        // schedule each note in the arpeggio
+        notes.forEach((n, j) => {
+          const delayMs = (idx * interval + j * offsetMs(idx, j)) * 1000;
+          const t = setTimeout(() => {
+            synthRef.current.triggerAttackRelease(
+              n,
+              interval - j * (interval * 0.1)
+            );
+          }, delayMs);
+          timeoutsRef.current.push(t);
+        });
       } else {
-        synthRef.current.triggerAttackRelease(notes, interval, time);
+        // schedule the whole chord
+        const delayMs = idx * interval * 1000;
+        const t = setTimeout(() => {
+          synthRef.current.triggerAttackRelease(notes, interval);
+        }, delayMs);
+        timeoutsRef.current.push(t);
       }
     });
+
+    // helper to calculate offset in ms for arpeggios
+    function offsetMs(i, j) {
+      return (interval * 0.1) * 1000 * j;
+    }
   };
 
   const handleInspireMe = () => {
